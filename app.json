@@ -1,0 +1,45 @@
+{ 
+  "id": "a4b188e3-8723-43d3-98b4-dc917fd1a1ce",
+  "name": "worldPOS-WP-EWallet",
+  "publisher": "World POS Sdn. Bhd.",
+  "version": "1.0.0.0",
+  "brief": "",
+  "description": "",
+  "privacyStatement": "",
+  "EULA": "",
+  "help": "",
+  "url": "",
+  "logo": "",
+   "dependencies": [
+    {
+      "id": "5ecfc871-5d82-43f1-9c54-59685e82318d",
+      "publisher": "LS Retail",
+      "name": "LS Central",
+      "version": "24.1.21.1157"
+    },
+    {
+      "id": "6b51a6c5-8dab-4c8d-ac1b-34d1e08086f4",
+      "publisher": "World POS Sdn. Bhd.",
+      "name": "worldPOS-MemberMgt",
+      "version": "24.1.0.50"
+    }
+  ],
+  "screenshots": [],
+  "platform": "1.0.0.0",
+  "application": "24.0.0.0",
+  "idRanges": [
+    {
+      "from": 70008,
+      "to": 72103
+    }
+  ],
+  "resourceExposurePolicy": {
+    "allowDebugging": true,
+    "allowDownloadingSource": true,
+    "includeSourceInSymbolFile": true
+  },
+  "runtime": "13.0",
+  "features": [
+    "NoImplicitWith"
+  ]
+}
