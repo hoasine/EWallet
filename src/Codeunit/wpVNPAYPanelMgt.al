@@ -416,6 +416,13 @@ codeunit 70008 "wpVNPAYPanelMgt"
 
 
 
+
+
+    end;
+
+    local procedure InsertTenderAmount(var POSTransaction: Record "LSC POS Transaction"; var POSTransLine: Record "LSC POS Trans. Line")
+    begin
+        // Placeholder for future logic if needed
         clear(POSTerminal);
         /*  POSTerminal.setrange("Store No.", POSTransaction."Store No.");
          POSTerminal.setrange("No.", POSTransaction."POS Terminal No.");
@@ -456,12 +463,6 @@ codeunit 70008 "wpVNPAYPanelMgt"
         RetailImage.Insert(true);
 
         ShowVNPAYPanel(PlaylistID, SkipCommit);
-
-    end;
-
-    local procedure InsertTenderAmount(var POSTransaction: Record "LSC POS Transaction"; var POSTransLine: Record "LSC POS Trans. Line")
-    begin
-        // Placeholder for future logic if needed
     end;
 
     procedure ShowVNPAYPanel(var PlaylistID: Code[20]; var SkipCommit: Boolean)
