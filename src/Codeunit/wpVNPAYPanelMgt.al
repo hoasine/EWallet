@@ -437,6 +437,7 @@ codeunit 70008 "wpVNPAYPanelMgt"
         Clear(PosTerminalID);
         Clear(Amount);
 
+<<<<<<< HEAD
         Parts := DataLine.Split(';');
         foreach Part in Parts do begin
             if Part.Contains(':') then begin
@@ -460,6 +461,87 @@ codeunit 70008 "wpVNPAYPanelMgt"
                         'AMOUNT':
                             Evaluate(Amount, KeyValue.Get(2));
                     end;
+=======
+
+
+
+
+    end;
+
+    local procedure InsertTenderAmount(var POSTransaction: Record "LSC POS Transaction"; var POSTransLine: Record "LSC POS Trans. Line")
+    begin
+        // Placeholder for future logic if needed
+        clear(POSTerminal);
+        /*  POSTerminal.setrange("Store No.", POSTransaction."Store No.");
+         POSTerminal.setrange("No.", POSTransaction."POS Terminal No.");
+         if POSTerminal.FindFirst() then begin
+             if POSTerminal."Enable VNPay Integration" = false then
+                 SkipCommit := true;
+             exit;
+         end; */
+        IF POSTransaction."Sale Is Return Sale" then
+            exit;
+        POSSESSION.SetValue('RECEIPTNO', POSTransaction."Receipt No.");
+        Amount := POSTransaction."Gross Amount";
+        //QRUrl := VNPAYAPI.GetPaymentQR(POSTransaction."Receipt No.", Amount); // or a test URL
+
+        QRUrl := VNPAYAPI.GetPaymentQR(POSTransaction."Receipt No.", Amount, TempBlob, CheckStatusUrl);
+        if not SwissQRCodeHelper.GenerateQRCodeImage(QRUrl, TempBlob) then
+            Error('Failed to generate VNPay QR');
+        PlaylistID := 'VNPAY_' + CopyStr(POSTransaction."Receipt No.", 8, 12);
+        if not PlaylistHdr.Get(PlaylistID) then begin
+            PlaylistHdr.Init();
+            PlaylistHdr."Playlist No." := PlaylistID;
+            PlaylistHdr.Description := Format(PlaylistID);
+            PlaylistHdr.Insert();
+        end;
+        RetailImageLink.Init();
+        RetailImageLink.Validate("Record Id", format(PlaylistHdr.RecordId)); // link to this transaction
+        RetailImageLink."Image Id" := UniqueRetailImageID(RetailImageLink.KeyValue);
+        RetailImageLink."Link Type" := RetailImageLink."Link Type"::"Image";
+        RetailImageLink.Validate("Image Description", POSTransaction."Receipt No.");
+        if not RetailImageLink.Insert() then
+            RetailImageLink.Modify();
+        if not RetailImage.Get(RetailImageLink."Image Id") then begin
+            RetailImage.Init();
+            RetailImage.Code := RetailImageLink."Image Id";
+        end;
+        TempBlob.CreateInStream(ImageInStream);
+        RetailImage."Image Mediaset".ImportStream(ImageInStream, '');
+        RetailImage.Insert(true);
+
+        ShowVNPAYPanel(PlaylistID, SkipCommit);
+    end;
+
+    procedure ShowVNPAYPanel(var PlaylistID: Code[20]; var SkipCommit: Boolean)
+    begin
+        SkipCommit := false;
+
+        POSCtrl.ShowPanelModal('#VNPAY', '#VNPAYQR');
+        POSCtrl.Playlist('#VNPAYQR', Format(PlaylistID));
+        // StartPolling();
+    end;
+
+    local procedure CloseVNPAYPanel()
+    begin
+        POSCtrl.HidePanel('#VNPAY', true);
+        POSCtrl.Playlist('#VNPAYQR', '');
+        //  ClearVNPAYSession();
+    end;
+
+    local procedure UniqueRetailImageID(KeyValue: text): Code[20]
+    var
+        RetailImage: Record "LSC Retail Image";
+        RetValue: Code[20];
+        j: Integer;
+    begin
+        RetValue := CopyStr(KeyValue, 1, 20);
+        j := 1;
+        while (RetailImage.Get(RetValue) and (j < 20)) do begin
+            if StrLen(RetValue) = 20 then begin
+                RetValue := 'Y' + CopyStr(RetValue, 1, 19);
+                j := j + 1;
+>>>>>>> 8b7ac703d07d3d7f2c418e697d06fcd27a4334c0
             end;
         end;
     end;

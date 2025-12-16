@@ -1,4 +1,4 @@
-{ 
+{
   "id": "a4b188e3-8723-43d3-98b4-dc917fd1a1ce",
   "name": "worldPOS-WP-EWallet",
   "publisher": "World POS Sdn. Bhd.",
@@ -16,12 +16,15 @@
       "publisher": "LS Retail",
       "name": "LS Central",
       "version": "24.1.21.1157"
+<<<<<<< HEAD
     },
     {
       "id": "6b51a6c5-8dab-4c8d-ac1b-34d1e08086f4",
       "publisher": "World POS Sdn. Bhd.",
       "name": "worldPOS-MemberMgt",
       "version": "24.1.0.51"
+=======
+>>>>>>> 8b7ac703d07d3d7f2c418e697d06fcd27a4334c0
     }
   ],
   "screenshots": [],
