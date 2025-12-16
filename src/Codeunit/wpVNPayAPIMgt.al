@@ -1,12 +1,8 @@
+//123
+
 codeunit 70009 "wpVNPayAPIMgt"
 {
-    procedure GetBaseUrl(): Text
-    begin
-        exit('http://localhost:5208');
-    end;
-
-    // NEW: Single blocking call that waits for payment (like VCB!)
-    procedure ProcessPaymentAndWait(ReceiptNo: Code[20]; Amount: Decimal; var ResponseData: Text): Boolean
+    procedure GetPaymentQR(ReceiptNo: Code[20]; Amount: Decimal; UserID: Code[20]; var QRImageBlob: Codeunit "Temp Blob"; var CheckStatusUrl: Text): Text
     var
         Client: HttpClient;
         Response: HttpResponseMessage;
@@ -14,84 +10,32 @@ codeunit 70009 "wpVNPayAPIMgt"
         JsonResponse: JsonObject;
         JsonToken: JsonToken;
         ApiUrl: Text;
-        TerminalID: Code[20];
-        MerchantCode: Code[20];
-        UserID: Code[20];
-        Timeout: Integer;
-        Success: Boolean;
-    begin
-        TerminalID := '1165089';
-        MerchantCode := '1225194';
-        UserID := 'POS001';
-        Timeout := 300; // 5 minutes
-
-        // This endpoint will:
-        // 1. Generate QR (if not exists)
-        // 2. Wait for payment on server side
-        // 3. Return when complete or timeout
-        ApiUrl := StrSubstNo(
-            '%1/api/vnpay/process-and-wait?receiptNo=%2&amount=%3&terminal=%4&merchant=%5&userId=%6&timeout=%7',
-            GetBaseUrl(),
-            ReceiptNo,
-            Format(Amount, 0, '<Integer>'),
-            TerminalID,
-            MerchantCode,
-            UserID,
-            Timeout
-        );
-
-        // BLOCKING CALL - waits up to 5 minutes
-        // POS will show "Working on it..." automatically
-        if not Client.Get(ApiUrl, Response) then
-            exit(false);
-
-        if not Response.IsSuccessStatusCode then
-            exit(false);
-
-        Response.Content.ReadAs(ResponseText);
-
-        if not JsonResponse.ReadFrom(ResponseText) then
-            exit(false);
-
-        // Check success
-        if JsonResponse.Get('success', JsonToken) then
-            Success := JsonToken.AsValue().AsBoolean()
-        else
-            exit(false);
-
-        if not Success then
-            exit(false);
-
-        // Get payment data
-        if JsonResponse.Get('data', JsonToken) then
-            ResponseData := JsonToken.AsValue().AsText()
-        else
-            exit(false);
-
-        exit(true);
-    end;
-
-    // EXISTING FUNCTIONS - Keep for QR display
-    procedure GetPaymentQR(ReceiptNo: Code[20]; Amount: Decimal; var QRImageBlob: Codeunit "Temp Blob"; var CheckStatusUrl: Text): Text
-    var
-        Client: HttpClient;
-        Response: HttpResponseMessage;
-        ResponseText: Text;
-        JsonResponse: JsonObject;
-        JsonToken: JsonToken;
-        ApiUrl: Text;
-        TerminalID: Code[20];
-        MerchantCode: Code[20];
-        UserID: Code[20];
+        TerminalID: Text[20];
+        MerchantCode: Text[20];
+        BaseUrl: Text[250];
         QRContent: Text;
+        LogLine: Text;
+        StatusCode: Text;
+        HttpStatus: Integer;
+        POSTerminal: Record "LSC POS Terminal";
     begin
-        TerminalID := '1165089';
-        MerchantCode := '1225194';
-        UserID := 'POS001';
+        if not POSTerminal.Get(POSSESSION.TerminalNo) then
+            Error('POS Terminal %1 not found.', POSSESSION.TerminalNo);
+
+        if not POSTerminal."Enable VNPay Integration" then
+            Error('VNPAY Integration is not enabled on this terminal.');
+
+        TerminalID := POSTerminal."VNPAY Terminal ID";
+        MerchantCode := POSTerminal."VNPAY Merchant ID";
+        BaseUrl := POSTerminal."VNPAY Payment Service URL";
+
+        if TerminalID = '' then Error('VNPAY Terminal ID is missing in POS Terminal setup.');
+        if MerchantCode = '' then Error('VNPAY Merchant ID is missing in POS Terminal setup.');
+        if BaseUrl = '' then Error('VNPAY Payment Service URL is missing in POS Terminal setup.');
 
         ApiUrl := StrSubstNo(
             '%1/api/vnpay/generate?receiptNo=%2&amount=%3&terminal=%4&merchant=%5&userId=%6',
-            GetBaseUrl(),
+            BaseUrl,
             ReceiptNo,
             Format(Amount, 0, '<Integer>'),
             TerminalID,
@@ -99,34 +43,70 @@ codeunit 70009 "wpVNPayAPIMgt"
             UserID
         );
 
-        if not Client.Get(ApiUrl, Response) then
+        LogText(ReceiptNo, 'VNPAY QR Request', ApiUrl);
+
+        if not Client.Get(ApiUrl, Response) then begin
+            LogText(ReceiptNo, 'VNPAY QR Error', 'status:500;message:Cannot connect to server');
             Error('Cannot connect to VNPAY server');
+        end;
 
-        if not Response.IsSuccessStatusCode then
-            Error('VNPAY API Error: %1 %2', Response.HttpStatusCode, Response.ReasonPhrase);
-
+        HttpStatus := Response.HttpStatusCode;
         Response.Content.ReadAs(ResponseText);
-        if not JsonResponse.ReadFrom(ResponseText) then
+
+        if not JsonResponse.ReadFrom(ResponseText) then begin
+            LogText(ReceiptNo, 'VNPAY QR Error',
+                StrSubstNo('status:%1;message:Invalid JSON;raw:%2', HttpStatus, ResponseText));
             Error('Invalid JSON from VNPAY');
+        end;
 
-        if not JsonResponse.Get('qrContent', JsonToken) then
-            Error('qrContent not found');
-
-        QRContent := JsonToken.AsValue().AsText();
-        if QRContent = '' then
-            Error('Empty QR content');
-
-        if JsonResponse.Get('checkStatusUrl', JsonToken) then
-            CheckStatusUrl := JsonToken.AsValue().AsText()
+        if JsonResponse.Get('code', JsonToken) then
+            StatusCode := Format(JsonToken.AsValue().AsInteger())
         else
-            CheckStatusUrl := StrSubstNo('%1/api/vnpay/status?receiptNo=%2', GetBaseUrl(), ReceiptNo);
+            StatusCode := Format(HttpStatus);
 
-        GenerateQRImageFromContent(QRContent, QRImageBlob);
+        LogLine := StrSubstNo('status:%1;', StatusCode);
 
-        exit(QRContent);
+        if StatusCode = '200' then begin
+            if JsonResponse.Get('receiptNo', JsonToken) then
+                LogLine += StrSubstNo('receiptNo:%1;', JsonToken.AsValue().AsText());
+            if JsonResponse.Get('amount', JsonToken) then
+                LogLine += StrSubstNo('amount:%1;', JsonToken.AsValue().AsText());
+            if JsonResponse.Get('qrContent', JsonToken) then begin
+                QRContent := JsonToken.AsValue().AsText();
+                LogLine += StrSubstNo('qrContent:%1', QRContent);
+            end;
+
+            LogText(ReceiptNo, 'VNPAY QR Response', LogLine);
+
+            if QRContent = '' then begin
+                LogText(ReceiptNo, 'VNPAY QR Error', 'status:431;message:Empty QR content');
+                Error('Empty QR content');
+            end;
+
+            if JsonResponse.Get('checkStatusUrl', JsonToken) then
+                CheckStatusUrl := JsonToken.AsValue().AsText()
+            else
+                CheckStatusUrl := StrSubstNo('%1/api/vnpay/status?receiptNo=%2', BaseUrl, ReceiptNo);
+
+            GenerateQRImageFromContent(QRContent, QRImageBlob);
+            exit(QRContent);
+
+        end else begin
+            if JsonResponse.Get('message', JsonToken) then
+                LogLine += StrSubstNo('message:%1', JsonToken.AsValue().AsText())
+            else
+                LogLine += 'message:Unknown error';
+
+            if JsonResponse.Get('receiptNo', JsonToken) then
+                LogLine += StrSubstNo(';receiptNo:%1', JsonToken.AsValue().AsText());
+
+            LogText(ReceiptNo, 'VNPAY QR Error', LogLine);
+            Commit();
+            Error('VNPAY API Error: %1', LogLine);
+        end;
     end;
 
-    procedure CheckPaymentStatus(ReceiptNo: Code[20]; var StatusCode: Integer; var DataLine: Text): Boolean
+    procedure CheckPaymentStatus(ReceiptNo: Code[20]; var FullDataLine: Text): Code[10]
     var
         Client: HttpClient;
         Response: HttpResponseMessage;
@@ -134,26 +114,62 @@ codeunit 70009 "wpVNPayAPIMgt"
         JsonResponse: JsonObject;
         JsonToken: JsonToken;
         ApiUrl: Text;
+        StatusCode: Code[10];
+        HttpStatus: Integer;
+        VNPayData: Text;
+        BaseUrl: Text[250];
+        POSTerminal: Record "LSC POS Terminal";
     begin
-        ApiUrl := StrSubstNo('%1/api/vnpay/status?receiptNo=%2', GetBaseUrl(), ReceiptNo);
+        FullDataLine := '';
 
-        if not Client.Get(ApiUrl, Response) then
-            exit(false);
+        if not POSTerminal.Get(POSSESSION.TerminalNo) then
+            Error('POS Terminal not found.');
 
-        StatusCode := Response.HttpStatusCode();
+        BaseUrl := POSTerminal."VNPAY Payment Service URL";
+        if BaseUrl = '' then Error('VNPAY Payment Service URL not configured.');
 
-        if not Response.IsSuccessStatusCode then
-            exit(false);
+        ApiUrl := StrSubstNo('%1/api/vnpay/status?receiptNo=%2', BaseUrl, ReceiptNo);
+        LogText(ReceiptNo, 'VNPAY Status Check', ApiUrl);
 
+        if not Client.Get(ApiUrl, Response) then begin
+            LogText(ReceiptNo, 'VNPAY Status Error', 'status:999;message:Cannot connect');
+            exit('999');
+        end;
+
+        HttpStatus := Response.HttpStatusCode();
+        StatusCode := Format(HttpStatus);
         Response.Content.ReadAs(ResponseText);
-        if not JsonResponse.ReadFrom(ResponseText) then
-            exit(false);
 
-        if JsonResponse.Contains('data') then
-            if JsonResponse.Get('data', JsonToken) then
-                DataLine := JsonToken.AsValue().AsText();
+        if not JsonResponse.ReadFrom(ResponseText) then begin
+            LogText(ReceiptNo, 'VNPAY Status Error', 'status:998;message:Invalid JSON');
+            exit('998');
+        end;
 
-        exit(true);
+        if JsonResponse.Get('code', JsonToken) then
+            StatusCode := Format(JsonToken.AsValue().AsInteger());
+
+        case StatusCode of
+            '200':
+                begin
+                    if JsonResponse.Get('data', JsonToken) then begin
+                        VNPayData := JsonToken.AsValue().AsText();
+                        FullDataLine := VNPayData;
+                    end else begin
+                        FullDataLine := 'APP:VNPAY;RESPONSE_CODE:00;NO_DATA:1;';
+                        LogText(ReceiptNo, 'VNPAY Status: SUCCESS', 'Payment completed (no data)');
+                    end;
+                end;
+            '201':
+                //LogText(ReceiptNo, 'VNPAY Status: PENDING', 'status:201;message:Đang xử lý');  command cuz log every 10s is so crazy
+
+                ;
+            '204':
+                LogText(ReceiptNo, 'VNPAY Status: FAILED', 'status:204;message:Thanh toán thất bại hoặc hết hạn');
+            else
+                LogText(ReceiptNo, 'VNPAY Status: FAILED', StrSubstNo('status:%1;message:Unknown', StatusCode));
+        end;
+
+        exit(StatusCode);
     end;
 
     local procedure GenerateQRImageFromContent(QRContent: Text; var TempBlob: Codeunit "Temp Blob")
@@ -164,55 +180,58 @@ codeunit 70009 "wpVNPayAPIMgt"
             Error('Failed to generate QR code image');
     end;
 
-    procedure ConsoleLogVNPAYSuccess(ReceiptNo: Code[20]; DataLine: Text)
+    internal procedure LogText(pheader: Code[20]; ptitle: Text[50]; pText: Text[2048])
     var
-        APP, ResponseCode, VNPDate, VNPTime, TerminalID, MerchantCode, Invoice, PosTerminalID, Amount : Text;
+        lreccom: Record "LSC Comment";
+        nextlineno: Integer;
     begin
-        Message('[VNPAY] RAW: %1', DataLine);
+        clear(lreccom);
+        lreccom.SetRange("Linked Record Id Text", pheader);
+        if lreccom.FindLast() then
+            nextlineno := lreccom."Line No." + 1
+        else
+            nextlineno := 1;
 
-        ParseVNPAYData(DataLine, APP, ResponseCode, VNPDate, VNPTime, TerminalID, MerchantCode, Invoice, PosTerminalID, Amount);
-
-        Message(
-            '[VNPAY] PARSED: APP=%1, CODE=%2, DATE=%3, TIME=%4, TERM=%5, MCH=%6, INV=%7, POS=%8, AMT=%9',
-            APP, ResponseCode, VNPDate, VNPTime, TerminalID, MerchantCode, Invoice, PosTerminalID, Amount
-        );
-
-        Message('[VNPAY] SUCCESS! Receipt: %1 | Amount: %2', ReceiptNo, Amount);
+        clear(lreccom);
+        lreccom."Line No." := nextlineno;
+        lreccom."Linked Record Id Text" := pheader;
+        lreccom.Comment := CopyStr(pText, 1, MaxStrLen(lreccom.Comment));
+        lreccom."Comment Category Description" := ptitle;
+        lreccom.Insert();
     end;
 
-    procedure ParseVNPAYData(DataLine: Text; var APP: Text; var ResponseCode: Text; var Date: Text; var Time: Text; var TerminalID: Text; var MerchantCode: Text; var Invoice: Text; var PosTerminalID: Text; var Amount: Text)
-    var
-        DataArray: List of [Text];
-        Field: Text;
-        FieldParts: List of [Text];
-    begin
-        DataArray := DataLine.Split(';');
 
-        foreach Field in DataArray do begin
-            FieldParts := Field.Split(':');
-            if FieldParts.Count >= 2 then begin
-                case FieldParts.Get(1) of
-                    'APP':
-                        APP := FieldParts.Get(2);
-                    'RESPONSE_CODE':
-                        ResponseCode := FieldParts.Get(2);
-                    'DATE':
-                        Date := FieldParts.Get(2);
-                    'TIME':
-                        Time := FieldParts.Get(2);
-                    'TERMINAL_ID':
-                        TerminalID := FieldParts.Get(2);
-                    'MERCHANT_CODE':
-                        MerchantCode := FieldParts.Get(2);
-                    'INVOICE':
-                        Invoice := FieldParts.Get(2);
-                    'PosTerminalID':
-                        PosTerminalID := FieldParts.Get(2);
-                    'AMOUNT':
-                        Amount := FieldParts.Get(2);
-                end;
-            end;
-        end;
+    procedure CancelPayment(ReceiptNo: Code[20])
+    var
+        Client: HttpClient;
+        Response: HttpResponseMessage;
+        ApiUrl: Text;
+        BaseUrl: Text[250];
+        POSTerminal: Record "LSC POS Terminal";
+        Content: HttpContent;
+    begin
+        if ReceiptNo = '' then
+            exit;
+
+        if not POSTerminal.Get(POSSESSION.TerminalNo) then
+            exit;
+
+        BaseUrl := POSTerminal."VNPAY Payment Service URL";
+        if BaseUrl = '' then
+            exit;
+
+        ApiUrl :=
+            StrSubstNo(
+                '%1/api/vnpay/cancel?receiptNo=%2',
+                BaseUrl,
+                ReceiptNo
+            );
+
+        LogText(ReceiptNo, 'VNPAY CANCEL REQUEST', ApiUrl);
+
+        Client.Post(ApiUrl, Content, Response);
     end;
-    
+
+    var
+        POSSESSION: Codeunit "LSC POS Session";
 }
