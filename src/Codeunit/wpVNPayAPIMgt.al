@@ -1,3 +1,4 @@
+
 //123
 
 codeunit 70009 "wpVNPayAPIMgt"
@@ -18,23 +19,27 @@ codeunit 70009 "wpVNPayAPIMgt"
         StatusCode: Text;
         HttpStatus: Integer;
         POSTerminal: Record "LSC POS Terminal";
+        Store: Record "LSC Store";
     begin
         if not POSTerminal.Get(POSSESSION.TerminalNo) then
             Error('POS Terminal %1 not found.', POSSESSION.TerminalNo);
 
-        if not POSTerminal."Enable VNPay Integration" then
-            Error('VNPAY Integration is not enabled on this terminal.');
+        if not Store.Get(POSTerminal."Store No.") then
+            Error('Store %1 not found.', POSTerminal."Store No.");
 
-        TerminalID := POSTerminal."VNPAY Terminal ID";
-        MerchantCode := POSTerminal."VNPAY Merchant ID";
-        BaseUrl := POSTerminal."VNPAY Payment Service URL";
+        if not Store."Enable VNPay Integration" then
+            Error('VNPAY Integration is not enabled for this store.');
+
+        TerminalID := Store."VNPAY Terminal ID";
+        MerchantCode := Store."VNPAY Merchant ID";
+        BaseUrl := Store."VNPAY Payment Service URL";
 
         if TerminalID = '' then Error('VNPAY Terminal ID is missing in POS Terminal setup.');
         if MerchantCode = '' then Error('VNPAY Merchant ID is missing in POS Terminal setup.');
         if BaseUrl = '' then Error('VNPAY Payment Service URL is missing in POS Terminal setup.');
 
         ApiUrl := StrSubstNo(
-            '%1/api/vnpay/generate?receiptNo=%2&amount=%3&terminal=%4&merchant=%5&userId=%6',
+            '%1/api/vnpay/generate?receiptNo=%2&amount=%3&terminalCode=%4&merchantCode=%5&userId=%6',
             BaseUrl,
             ReceiptNo,
             Format(Amount, 0, '<Integer>'),
@@ -119,17 +124,26 @@ codeunit 70009 "wpVNPayAPIMgt"
         VNPayData: Text;
         BaseUrl: Text[250];
         POSTerminal: Record "LSC POS Terminal";
+        Store: Record "LSC Store";
     begin
         FullDataLine := '';
 
         if not POSTerminal.Get(POSSESSION.TerminalNo) then
             Error('POS Terminal not found.');
 
-        BaseUrl := POSTerminal."VNPAY Payment Service URL";
-        if BaseUrl = '' then Error('VNPAY Payment Service URL not configured.');
+        if not Store.Get(POSTerminal."Store No.") then
+            Error('Store not found.');
+
+        BaseUrl := Store."VNPAY Payment Service URL";
+        if BaseUrl = '' then
+            Error('VNPAY Payment Service URL not configured.');
 
         ApiUrl := StrSubstNo('%1/api/vnpay/status?receiptNo=%2', BaseUrl, ReceiptNo);
-        LogText(ReceiptNo, 'VNPAY Status Check', ApiUrl);
+
+        if POSSESSION.GetValue('VNPAY_STATUS_LOGGED') = '' then begin
+            LogText(ReceiptNo, 'VNPAY Status Check', ApiUrl);
+            POSSESSION.SetValue('VNPAY_STATUS_LOGGED', 'YES');
+        end;
 
         if not Client.Get(ApiUrl, Response) then begin
             LogText(ReceiptNo, 'VNPAY Status Error', 'status:999;message:Cannot connect');
@@ -209,6 +223,7 @@ codeunit 70009 "wpVNPayAPIMgt"
         BaseUrl: Text[250];
         POSTerminal: Record "LSC POS Terminal";
         Content: HttpContent;
+        Store: Record "LSC Store";
     begin
         if ReceiptNo = '' then
             exit;
@@ -216,7 +231,10 @@ codeunit 70009 "wpVNPayAPIMgt"
         if not POSTerminal.Get(POSSESSION.TerminalNo) then
             exit;
 
-        BaseUrl := POSTerminal."VNPAY Payment Service URL";
+        if not Store.Get(POSTerminal."Store No.") then
+            exit;
+
+        BaseUrl := Store."VNPAY Payment Service URL";
         if BaseUrl = '' then
             exit;
 
@@ -235,3 +253,5 @@ codeunit 70009 "wpVNPayAPIMgt"
     var
         POSSESSION: Codeunit "LSC POS Session";
 }
+
+

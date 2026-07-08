@@ -1,4 +1,4 @@
-codeunit 70008 "wpVNPAYPanelMgt"
+codeunit 70015 "wpVCBPanelMgt"
 {
     SingleInstance = true;
     TableNo = "LSC POS Menu Line";
@@ -13,18 +13,17 @@ codeunit 70008 "wpVNPAYPanelMgt"
 
         if GlobalRec."Pos Event Type" = GlobalRec."Pos Event Type"::BUTTONPRESS then begin
             if GlobalRec.Parameter = 'CHECK' then begin
-                if vnpayStatus_g = 'PAID' then
-                    exit;
-
+                if vcbStatus_g = 'PAID' then exit;
                 ManualCheckStatus();
             end else
                 if GlobalRec.Parameter = 'OK' then
-                    CancelVNPAY()
+                    CancelVCB()
                 else
                     GlobalRec.Processed := false;
         end else
             GlobalRec.Processed := false;
     end;
+
 
     local procedure StartAutoCheck()
     begin
@@ -39,67 +38,56 @@ codeunit 70008 "wpVNPAYPanelMgt"
         AutoCheckCount := 0;
     end;
 
-
-
     local procedure CheckAutoCheckTimer()
     var
         Elapsed: Integer;
         WaitTime: Integer;
-        firstCheck: Integer;
-        intervalCheck: Integer;
-        maxRetries: Integer;
+        FirstCheck: Integer;
+        IntervalCheck: Integer;
+        MaxRetries: Integer;
         Store: Record "LSC Store";
         POSTerminal: Record "LSC POS Terminal";
     begin
-        if not IsWaitingForAutoCheck then
-            exit;
+        if not IsWaitingForAutoCheck then exit;
 
         if not POSTerminal.Get(POSSESSION.TerminalNo) then
             Error('POS Terminal not found.');
-
         if not Store.Get(POSTerminal."Store No.") then
             Error('Store not found.');
 
-        firstCheck := Store."VNPAY First Check Delay Sec";
-        intervalCheck := Store."VNPAY Check Interval Sec";
-        maxRetries := Store."VNPay Max Retries";
+        FirstCheck := Store."VCB First Check Delay Sec";
+        IntervalCheck := Store."VCB Check Interval Sec";
+        MaxRetries := Store."VCB Max Retries";
 
-        if firstCheck = 0 then
-            Error('VNPAY First Check is missing in Store setup.');
-
-        if intervalCheck = 0 then
-            Error('VNPAY Check Interval is missing in Store setup.');
-
-        if maxRetries = 0 then
-            maxRetries := 90;
+        if FirstCheck = 0 then Error('VCB First Check Delay is missing in Store setup.');
+        if IntervalCheck = 0 then Error('VCB Check Interval is missing in Store setup.');
+        if MaxRetries = 0 then MaxRetries := 90;
 
         Elapsed := (CurrentDateTime - LastAutoCheckTime) div 1000;
 
         if AutoCheckCount = 0 then
-            WaitTime := firstCheck
+            WaitTime := FirstCheck
         else
-            WaitTime := intervalCheck;
+            WaitTime := IntervalCheck;
 
         if Elapsed >= WaitTime then begin
             LastAutoCheckTime := CurrentDateTime;
             AutoCheckCount += 1;
 
-            if AutoCheckCount > maxRetries then begin
-                if vnpayStatus_g in ['PAID', 'FAILED', 'CANCELLED', 'EXPIRED', ''] then begin
-                    VNPAYAPI.LogText(POSTransaction_g."Receipt No.",
-                        'AUTO_CHECK_TIMEOUT',
-                        StrSubstNo('Stopping at terminal status=%1, Count=%2', vnpayStatus_g, AutoCheckCount));
+            if AutoCheckCount > MaxRetries then begin
+                if vcbStatus_g in ['PAID', 'FAILED', 'CANCELLED', 'EXPIRED', ''] then begin
+                    VCBAPI.LogText(POSTransaction_g."Receipt No.",
+                        'VCB_AUTO_CHECK_TIMEOUT',
+                        StrSubstNo('Stopping at status=%1, Count=%2', vcbStatus_g, AutoCheckCount));
                     StopAutoCheck();
                     exit;
                 end else begin
-                    if (AutoCheckCount mod 30) = 0 then begin
-                        VNPAYAPI.LogText(POSTransaction_g."Receipt No.",
-                            'AUTO_CHECK_EXTENDED',
-                            StrSubstNo('Still checking, Count=%1, Status=%2', AutoCheckCount, vnpayStatus_g));
-                    end;
+                    if (AutoCheckCount mod 30) = 0 then
+                        VCBAPI.LogText(POSTransaction_g."Receipt No.",
+                            'VCB_AUTO_CHECK_EXTENDED',
+                            StrSubstNo('Still checking, Count=%1, Status=%2', AutoCheckCount, vcbStatus_g));
                 end;
             end;
-
 
             PerformAutoCheck();
         end;
@@ -116,90 +104,55 @@ codeunit 70008 "wpVNPAYPanelMgt"
             exit;
         end;
 
-        StatusCode := VNPAYAPI.CheckPaymentStatus(POSTransaction_g."Receipt No.", FullDataLine);
+        StatusCode := VCBAPI.CheckPaymentStatus(POSTransaction_g."Receipt No.", FullDataLine);
 
         case StatusCode of
             '200':
                 begin
-                    POSSESSION.SetValue('VNPAY_FULL_DATA', FullDataLine);
+                    POSSESSION.SetValue('VCB_FULL_DATA', FullDataLine);
 
-                    TenderTypeCode := POSSESSION.GetValue('VNPAYTENDER');
+                    TenderTypeCode := POSSESSION.GetValue('VCBTENDER');
                     if TenderTypeCode = '' then
-                        TenderTypeCode := '87';
+                        TenderTypeCode := GetVCBTenderTypeCode();
 
+                    if POSSESSION.GetValue('VCB_CARD_ENTRY_DONE') <> 'YES' then
+                        cuPosTrans.TenderKeyPressedEx(TenderTypeCode, Format(vcbAmount_g));
 
-                    if POSSESSION.GetValue('VNPAY_CARD_ENTRY_DONE') <> 'YES' then
-                        cuPosTrans.TenderKeyPressedEx(TenderTypeCode, Format(vnpayAmount_g));
-
-                    POSSESSION.SetValue('VNPAYTENDER', TenderTypeCode);
-
-                    vnpayStatus_g := 'PAID';
-                    POSSESSION.SetValue('VNPAYStatus', vnpayStatus_g);
+                    POSSESSION.SetValue('VCBTENDER', TenderTypeCode);
+                    vcbStatus_g := 'PAID';
+                    POSSESSION.SetValue('VCBStatus', vcbStatus_g);
 
                     StopAutoCheck();
                     Sleep(1500);
-                    CloseVNPAYPanel();
+                    CloseVCBPanel();
                 end;
             '201':
-                ;
+                ; // Still processing
             else begin
                 StopAutoCheck();
-                POSGUI.PosMessage('PAYMENT FAILED OR EXPIRED');
-                CloseVNPAYPanel();
+                POSGUI.PosMessage('VCB PAYMENT FAILED OR EXPIRED');
+                CloseVCBPanel();
             end;
         end;
     end;
 
+    // ── POS Events ────────────────────────────────────────────────────────────
 
     [EventSubscriber(ObjectType::Codeunit, Codeunit::"LSC POS Transaction Events", 'OnBeforeInit', '', false, false)]
     local procedure OnBeforeInit(var POSTransaction: Record "LSC POS Transaction")
     begin
-        VnpayStatus_g := '';
-        VnpayType_g := '';
-        VnpayAmount_g := 0;
-        Balance_g := 0;
+        vcbStatus_g := '';
+        vcbAmount_g := 0;
         TenderTypeCode_g := '';
         IsWaitingForAutoCheck := false;
         AutoCheckCount := 0;
-        POSSESSION.SetValue('VNPAYRECEIPT', '');
-        POSSESSION.SetValue('VNPAYBALANCE', '');
-        POSSESSION.SetValue('VNPAYTENDER', '');
-        POSSESSION.SetValue('VNPAYStatus', '');
-        POSSESSION.SetValue('VNPAYType', '');
-        POSSESSION.SetValue('VNPAYAmount', '');
+        POSSESSION.SetValue('VCBRECEIPT', '');
+        POSSESSION.SetValue('VCBBALANCE', '');
+        POSSESSION.SetValue('VCBTENDER', '');
+        POSSESSION.SetValue('VCBStatus', '');
+        POSSESSION.SetValue('VCBAmount', '');
         POSTransaction_g := POSTransaction;
         if POSTerminal_g.Get(POSSESSION.TerminalNo) then;
-    end;
-
-
-    local procedure ManualCheckStatus()
-    var
-        StatusCode: Code[10];
-        FullDataLine: Text;
-    begin
-        //StopAutoCheck();
-
-        StatusCode := VNPAYAPI.CheckPaymentStatus(POSTransaction_g."Receipt No.", FullDataLine);
-
-        case StatusCode of
-            '200':
-                begin
-                    POSSESSION.SetValue('VNPAY_FULL_DATA', FullDataLine);
-                    POSGUI.PosMessage('PAYMENT SUCCESSFUL');
-                    Sleep(1000);
-                    //CloseVNPAYPanel();
-                end;
-            '201':
-                begin
-                    POSGUI.PosMessage('TRANSACTION STILL PROCESSING');
-                    Sleep(2000);
-                end;
-            else begin
-                POSGUI.PosMessage('PAYMENT FAILED OR EXPIRED');
-                Sleep(3000);
-                CloseVNPAYPanel();
-            end;
-        end;
     end;
 
     [EventSubscriber(ObjectType::Codeunit, Codeunit::"LSC POS Transaction Events", 'OnBeforeInsertPaymentLine', '', false, false)]
@@ -212,22 +165,25 @@ codeunit 70008 "wpVNPAYPanelMgt"
         PaymentAmount: Decimal;
         STATE: Code[10];
         var isHandled: Boolean)
+    var
+        VCBTenderCode: Code[10];
     begin
-        if TenderTypeCode <> '87' then
-            exit;
+        VCBTenderCode := GetVCBTenderTypeCode();
+        if VCBTenderCode = '' then exit;
+        if TenderTypeCode <> VCBTenderCode then exit;
 
-        if POSSESSION.GetValue('VNPAYRECEIPT') <> POSTransaction."Receipt No." then begin
-            vnpayStatus_g := '';
-            POSSESSION.SetValue('VNPAYStatus', '');
-            POSSESSION.SetValue('VNPAYRECEIPT', '');
+        if POSSESSION.GetValue('VCBRECEIPT') <> POSTransaction."Receipt No." then begin
+            vcbStatus_g := '';
+            POSSESSION.SetValue('VCBStatus', '');
+            POSSESSION.SetValue('VCBRECEIPT', '');
         end else
-            vnpayStatus_g := POSSESSION.GetValue('VNPAYStatus');
+            vcbStatus_g := POSSESSION.GetValue('VCBStatus');
 
-        if vnpayStatus_g = '' then begin
+        if vcbStatus_g = '' then begin
             if InsertTenderAmount(POSTransaction, PaymentAmount) then begin
                 TenderTypeCode_g := TenderTypeCode;
-                vnpayAmount_g := PaymentAmount;
-                POSSESSION.SetValue('VNPAYRECEIPT', POSTransaction."Receipt No.");
+                vcbAmount_g := PaymentAmount;
+                POSSESSION.SetValue('VCBRECEIPT', POSTransaction."Receipt No.");
                 isHandled := true;
             end;
         end else
@@ -239,7 +195,6 @@ codeunit 70008 "wpVNPAYPanelMgt"
         POSTerminal: Record "LSC POS Terminal";
         SwissQRCodeHelper: Codeunit "Swiss QR Code Helper";
         PlaylistHdr: Record "LSC POS Media Playlist Header";
-        QRUrl: Text;
         RetailImageLink: Record "LSC Retail Image Link";
         RetailImage: Record "LSC Retail Image";
         TempBLOB: Codeunit "Temp Blob";
@@ -250,17 +205,16 @@ codeunit 70008 "wpVNPAYPanelMgt"
         ImageFileName: Text[250];
         Counter: Integer;
         Store: Record "LSC Store";
+        QRUrl: Text;
     begin
         if POSTransaction."Sale Is Return Sale" then exit;
 
         if not POSTerminal.Get(POSTransaction."POS Terminal No.") then
             Error('POS Terminal not found.');
-
         if not Store.Get(POSTerminal."Store No.") then
             Error('Store not found.');
-
-        if not Store."Enable VNPay Integration" then
-            Error('VNPAY is not enabled on this store.');
+        if not Store."Enable VCB Integration" then
+            Error('VCB is not enabled on this store.');
 
         POSSESSION.SetValue('RECEIPTNO', POSTransaction."Receipt No.");
 
@@ -269,28 +223,31 @@ codeunit 70008 "wpVNPAYPanelMgt"
         else
             UserID := POSSESSION.TerminalNo;
 
-        if TransAmount < 10000 then
-            Error('Minimum VNPay payment amount is 10,000 VND.');
+        if TransAmount < 1000 then
+            Error('Minimum VCB payment amount is 1,000 VND.');
 
+        // Get QR payload from VCB via our .NET API
+        QRUrl := VCBAPI.GetPaymentQR(
+            POSTransaction."Receipt No.", TransAmount, UserID, TempBlob, CheckStatusUrl);
 
-        QRUrl := VNPAYAPI.GetPaymentQR(POSTransaction."Receipt No.", TransAmount, UserID, TempBlob, CheckStatusUrl);
-
+        // Generate QR image
         if not SwissQRCodeHelper.GenerateQRCodeImage(QRUrl, TempBlob) then
-            Error('Failed to generate VNPay QR');
+            Error('Failed to generate VCB QR image');
 
-        ImageID := 'VNPAY';
+        // ── Store QR image in LSC Retail Image (same pattern as VNPAY) ───────
+        ImageID := 'VCB';
         Counter := 0;
-        if Evaluate(Counter, POSSESSION.GetValue('VNPAY_IMAGE_COUNTER')) then
+        if Evaluate(Counter, POSSESSION.GetValue('VCB_IMAGE_COUNTER')) then
             Counter += 1
         else
             Counter := 1;
-        POSSESSION.SetValue('VNPAY_IMAGE_COUNTER', Format(Counter));
-        ImageFileName := StrSubstNo('VNPAY_QR_%1.png', Counter);
+        POSSESSION.SetValue('VCB_IMAGE_COUNTER', Format(Counter));
+        ImageFileName := StrSubstNo('VCB_QR_%1.png', Counter);
 
-        if not PlaylistHdr.Get('VNPAYQR') then begin
+        if not PlaylistHdr.Get('VCBQR') then begin
             PlaylistHdr.Init();
-            PlaylistHdr."Playlist No." := 'VNPAYQR';
-            PlaylistHdr.Description := 'VNPAY QR Only';
+            PlaylistHdr."Playlist No." := 'VCBQR';
+            PlaylistHdr.Description := 'VCB QR Only';
             PlaylistHdr.Insert(true);
         end;
 
@@ -317,21 +274,19 @@ codeunit 70008 "wpVNPAYPanelMgt"
         RetailImage.Modify(true);
         Commit();
 
-        ShowVNPAYPanel();
-
+        ShowVCBPanel();
         StartAutoCheck();
 
-        vnpayStatus_g := 'WAITPAY';
-        POSSESSION.SetValue('VNPAYStatus', vnpayStatus_g);
-        POSSESSION.SetValue('VNPAYRECEIPT', POSTransaction."Receipt No.");
+        vcbStatus_g := 'WAITPAY';
+        POSSESSION.SetValue('VCBStatus', vcbStatus_g);
+        POSSESSION.SetValue('VCBRECEIPT', POSTransaction."Receipt No.");
         POSTransaction_g := POSTransaction;
-
 
         exit(true);
     end;
 
     [EventSubscriber(ObjectType::Codeunit, Codeunit::"LSC POS Transaction Events", 'OnAfterInsertPaymentLine', '', false, false)]
-    local procedure OnAfterInsertPaymentLine_VNPAY(
+    local procedure OnAfterInsertPaymentLine_VCB(
         var POSTransaction: Record "LSC POS Transaction";
         var POSTransLine: Record "LSC POS Trans. Line";
         var CurrInput: Text;
@@ -349,7 +304,6 @@ codeunit 70008 "wpVNPAYPanelMgt"
         Invoice: Code[20];
         PosTerminalID: Code[20];
         Amount: Decimal;
-        TransNo: Integer;
         TransactionCode: Code[20];
         BankCode: Text[20];
         ApprovalCode: Text[20];
@@ -357,39 +311,36 @@ codeunit 70008 "wpVNPAYPanelMgt"
         CardLast4: Text[10];
         RealAmount: Decimal;
         PartnerTransCode: Text[20];
+        VCBTenderCode: Code[10];
     begin
-        if TenderTypeCode <> '87' then exit;
+        VCBTenderCode := GetVCBTenderTypeCode();
+        if VCBTenderCode = '' then exit;
+        if TenderTypeCode <> VCBTenderCode then exit;
         if POSTransLine."Entry Type" <> POSTransLine."Entry Type"::Payment then exit;
-        if POSSESSION.GetValue('VNPAY_CARD_ENTRY_DONE') = 'YES' then exit;
+        if POSSESSION.GetValue('VCB_CARD_ENTRY_DONE') = 'YES' then exit;
 
-        FullDataLine := POSSESSION.GetValue('VNPAY_FULL_DATA');
+        FullDataLine := POSSESSION.GetValue('VCB_FULL_DATA');
+        if FullDataLine = '' then
+            FullDataLine := StrSubstNo('APP:VCB;RESPONSE_CODE:00;INVOICE:%1;AMOUNT:%2;',
+                POSTransaction."Receipt No.", Format(POSTransLine.Amount));
 
-        if FullDataLine = '' then begin
-            FullDataLine := StrSubstNo('APP:VNPAY;RESPONSE_CODE:00;INVOICE:%1;AMOUNT:%2;',
-                                    POSTransaction."Receipt No.", Format(POSTransLine.Amount));
-        end;
-
-        ParseVNPAYDataLine(
+        // Reuse same parser as VNPAY — data line format is identical
+        ParseVCBDataLine(
             FullDataLine,
             ResponseCode, DateStr, TimeStr,
             TerminalID, MerchantCode, Invoice, PosTerminalID,
             Amount, TransactionCode,
             BankCode, ApprovalCode,
             CardFirst6, CardLast4,
-            RealAmount, PartnerTransCode
-        );
+            RealAmount, PartnerTransCode);
 
-
-        VNPAYAPI.LogText(
+        VCBAPI.LogText(
             POSTransaction."Receipt No.",
-            'VNPAY Parsed Data',
-            StrSubstNo(
-                'TransCode:%1;Bank:%2;Approval:%3;Card:%4***%5;RealAmt:%6;PartnerTrans:%7',
-                TransactionCode, BankCode, ApprovalCode,
-                 RealAmount, PartnerTransCode
-            )
-        );
+            'VCB Parsed Data',
+            StrSubstNo('TransCode:%1;Bank:%2;Approval:%3;RealAmt:%4;PartnerTrans:%5',
+                TransactionCode, BankCode, ApprovalCode, RealAmount, PartnerTransCode));
 
+        // ── Write Card Entry ─────────────────────────────────────────────────
         CardEntry.SetRange("Store No.", POSTransaction."Store No.");
         CardEntry.SetRange("POS Terminal No.", POSTransaction."POS Terminal No.");
         if CardEntry.FindLast() then
@@ -403,26 +354,21 @@ codeunit 70008 "wpVNPAYPanelMgt"
         CardEntry."Entry No." := NextEntryNo;
         CardEntry."Line No." := POSTransLine."Line No.";
         CardEntry."Receipt No." := POSTransaction."Receipt No.";
-        CardEntry."Tender Type" := '87';
+        CardEntry."Tender Type" := VCBTenderCode;
         CardEntry."Transaction Type" := CardEntry."Transaction Type"::Sale;
-
-
-        CardEntry."Card Number" := 'VNPAY_QR';
-
-        CardEntry."Card Type" := 'VNPAY';
+        CardEntry."Card Number" := 'VCB_QR';
+        CardEntry."Card Type" := 'VCB';
         CardEntry."Res.code" := ResponseCode;
-
 
         if ApprovalCode <> '' then
             CardEntry."EFT Auth.code" := ApprovalCode
         else
-            CardEntry."EFT Auth.code" := 'VNPAY';
+            CardEntry."EFT Auth.code" := 'VCB';
 
         CardEntry."EFT Trans. No." := TransactionCode;
         CardEntry."EFT Merchant No." := MerchantCode;
         CardEntry."EFT Trans. Date" := DateStr;
         CardEntry."EFT Trans. Time" := TimeStr;
-
 
         if RealAmount > 0 then
             CardEntry.Amount := RealAmount
@@ -432,86 +378,140 @@ codeunit 70008 "wpVNPAYPanelMgt"
         CardEntry."EFT Transaction ID" := Invoice;
         CardEntry."EFT Currency" := 'VND';
         CardEntry."EFT Terminal ID" := TerminalID;
-        CardEntry."Auth. Source Code" := 'VNPAY';
+        CardEntry."Auth. Source Code" := 'VCB';
         CardEntry.Date := Today;
         CardEntry.Time := Time;
         CardEntry."Authorisation Ok" := (ResponseCode = '00');
         CardEntry.Insert(true);
 
-        TransNo := CardEntry."Transaction No.";
+        VCBAPI.LogText(POSTransaction."Receipt No.", 'VCB Card Entry Created',
+            StrSubstNo('EntryNo:%1', NextEntryNo));
 
-        FullDataLine += StrSubstNo('TransNo:%1;BCEntryNo:%2;', TransNo, NextEntryNo);
-        VNPAYAPI.LogText(POSTransaction."Receipt No.", 'VNPAY Complete Data', FullDataLine);
-
-        POSSESSION.SetValue('VNPAY_CARD_ENTRY_DONE', 'YES');
-
-
-
-
-        POSSESSION.SetValue('VNPAYAmount', '');
+        POSSESSION.SetValue('VCB_CARD_ENTRY_DONE', 'YES');
+        POSSESSION.SetValue('VCBAmount', '');
     end;
 
-    procedure ShowVNPAYPanel()
+    // ── Manual check (CHECK button on panel) ─────────────────────────────────
+
+    local procedure ManualCheckStatus()
+    var
+        StatusCode: Code[10];
+        FullDataLine: Text;
+    begin
+        StatusCode := VCBAPI.CheckPaymentStatus(POSTransaction_g."Receipt No.", FullDataLine);
+
+        case StatusCode of
+            '200':
+                begin
+                    POSSESSION.SetValue('VCB_FULL_DATA', FullDataLine);
+                    POSGUI.PosMessage('VCB PAYMENT SUCCESSFUL');
+                    Sleep(1000);
+                end;
+            '201':
+                begin
+                    POSGUI.PosMessage('VCB TRANSACTION STILL PROCESSING');
+                    Sleep(2000);
+                end;
+            else begin
+                POSGUI.PosMessage('VCB PAYMENT FAILED OR EXPIRED');
+                Sleep(3000);
+                CloseVCBPanel();
+            end;
+        end;
+    end;
+
+    // ── Panel show/hide ───────────────────────────────────────────────────────
+
+    procedure ShowVCBPanel()
     begin
         POSCtrl.SetClientTypeEnum("LSC POS Client Type"::Pos);
-        POSCtrl.ShowPanelModal('#VNPAY', '#VNPAYQR');
+        POSCtrl.ShowPanelModal('#VCB', '#VCBQR');
 
         POSCtrl.SetClientTypeEnum("LSC POS Client Type"::DualDisplay);
-        POSCtrl.ShowPanelModal('#VNPAY', '#VNPAYQR');
+        POSCtrl.ShowPanelModal('#VCB', '#VCBQR');
 
         POSCtrl.SetClientTypeEnum("LSC POS Client Type"::Pos);
     end;
 
-    local procedure CloseVNPAYPanel()
+    local procedure CloseVCBPanel()
     var
         RetailImage: Record "LSC Retail Image";
         RetailImageLink: Record "LSC Retail Image Link";
         PlaylistHdr: Record "LSC POS Media Playlist Header";
     begin
         POSCtrl.SetClientTypeEnum("LSC POS Client Type"::Pos);
-        POSCtrl.HidePanel('#VNPAY', true);
+        POSCtrl.HidePanel('#VCB', true);
 
         POSCtrl.SetClientTypeEnum("LSC POS Client Type"::DualDisplay);
-        POSCtrl.HidePanel('#VNPAY', true);
+        POSCtrl.HidePanel('#VCB', true);
 
-        POSCtrl.Playlist('#VNPAYQR', '');
+        POSCtrl.Playlist('#VCBQR', '');
         POSCtrl.RefreshInterfaceProfile('');
-        POSCtrl.Playlist('#VNPAYQR', 'VNPAYQR');
+        POSCtrl.Playlist('#VCBQR', 'VCBQR');
 
-        if PlaylistHdr.Get('VNPAYQR') then begin
+        if PlaylistHdr.Get('VCBQR') then begin
             RetailImageLink.SetRange("Record Id", Format(PlaylistHdr.RecordId));
             RetailImageLink.DeleteAll(true);
         end;
 
-        if RetailImage.Get('VNPAY') then begin
+        if RetailImage.Get('VCB') then begin
             Clear(RetailImage."Image Mediaset");
             RetailImage.Modify(true);
             RetailImage.Delete(false);
         end;
 
         Commit();
-
         POSCtrl.SetClientTypeEnum("LSC POS Client Type"::Pos);
-
-        ClearVNPAYSession();
+        ClearVCBSession();
     end;
 
-    local procedure ClearVNPAYSession()
+    local procedure CancelVCB()
+    var
+        ReceiptNo: Code[20];
     begin
-        vnpayStatus_g := '';
-        // vnpayAmount_g := 0;
+        ReceiptNo := POSTransaction_g."Receipt No.";
+        if ReceiptNo <> '' then
+            VCBAPI.CancelPayment(ReceiptNo);
+
+        POSGUI.PosMessage('VCB CANCELLED');
+        Sleep(800);
+        CloseVCBPanel();
+    end;
+
+    local procedure ClearVCBSession()
+    begin
+        vcbStatus_g := '';
         TenderTypeCode_g := '';
         POSTransaction_g.Init();
-        POSSESSION.SetValue('VNPAY_FULL_DATA', '');
-        POSSESSION.SetValue('VNPAY_CARD_ENTRY_DONE', '');
-        POSSESSION.SetValue('VNPAYStatus', '');
-        POSSESSION.SetValue('VNPAYRECEIPT', '');
-        POSSESSION.SetValue('VNPAY_STATUS_LOGGED', '');
-        POSSESSION.SetValue('VNPAY_SUCCESS_LOGGED', '');
-        POSSESSION.SetValue('VNPAY_FAILED_LOGGED', '');
+        POSSESSION.SetValue('VCB_FULL_DATA', '');
+        POSSESSION.SetValue('VCB_CARD_ENTRY_DONE', '');
+        POSSESSION.SetValue('VCBStatus', '');
+        POSSESSION.SetValue('VCBRECEIPT', '');
+        POSSESSION.SetValue('VCB_STATUS_LOGGED', '');
     end;
 
-    local procedure ParseVNPAYDataLine(
+    // ── Helpers ───────────────────────────────────────────────────────────────
+
+    /// <summary>
+    /// Read VCB tender type code from Store setup.
+    /// Returns '' if not configured, which causes all event subscribers to exit safely.
+    /// </summary>
+    local procedure GetVCBTenderTypeCode(): Code[10]
+    var
+        POSTerminal: Record "LSC POS Terminal";
+        Store: Record "LSC Store";
+    begin
+        if not POSTerminal.Get(POSSESSION.TerminalNo) then exit('');
+        if not Store.Get(POSTerminal."Store No.") then exit('');
+        exit(Store."VCB Tender Type Code");
+    end;
+
+    /// <summary>
+    /// Parse the semicolon-delimited data line returned by /api/vcb/status.
+    /// Same format as VNPAY data line — APP:VCB;RESPONSE_CODE:00;DATE:...
+    /// Extended with DEBIT_ACCT and DEBIT_NAME fields.
+    /// </summary>
+    local procedure ParseVCBDataLine(
         DataLine: Text;
         var ResponseCode: Code[10];
         var DateStr: Text[6];
@@ -533,7 +533,6 @@ codeunit 70008 "wpVNPAYPanelMgt"
         Part: Text;
         KeyValue: List of [Text];
     begin
-
         Clear(ResponseCode);
         Clear(DateStr);
         Clear(TimeStr);
@@ -586,40 +585,32 @@ codeunit 70008 "wpVNPAYPanelMgt"
                             Evaluate(RealAmount, KeyValue.Get(2));
                         'PARTNER_TRANS_CODE':
                             PartnerTransCode := CopyStr(KeyValue.Get(2), 1, MaxStrLen(PartnerTransCode));
+                        // VCB-specific extra fields — stored in session for receipt printing
+                        'DEBIT_ACCT':
+                            POSSESSION.SetValue('VCB_DEBIT_ACCT', CopyStr(KeyValue.Get(2), 1, 50));
+                        'DEBIT_NAME':
+                            POSSESSION.SetValue('VCB_DEBIT_NAME', CopyStr(KeyValue.Get(2), 1, 70));
                     end;
             end;
         end;
     end;
 
-    local procedure CancelVNPAY()
-    var
-        ReceiptNo: Code[20];
-    begin
-        ReceiptNo := POSTransaction_g."Receipt No.";
-        if ReceiptNo <> '' then
-            VNPAYAPI.CancelPayment(ReceiptNo);
-
-        POSGUI.PosMessage('VNPAY CANCELLED');
-        Sleep(800);
-        CloseVNPAYPanel();
-    end;
+    // ── Variables ─────────────────────────────────────────────────────────────
 
     var
         GlobalRec: Record "LSC POS Menu Line";
         POSCtrl: Codeunit "LSC POS Control Interface";
         POSGUI: Codeunit "LSC POS GUI";
-        VNPAYAPI: Codeunit "wpVNPayAPIMgt";
+        VCBAPI: Codeunit "wpVCBAPIMgt";
         cuPosTrans: Codeunit "LSC POS Transaction";
         POSSESSION: Codeunit "LSC POS Session";
         POSTransaction_g: Record "LSC POS Transaction";
-        POSTransLine_g: Record "LSC POS Trans. Line";
         POSTerminal_g: Record "LSC POS Terminal";
-        Balance_g: Decimal;
         TenderTypeCode_g: Code[10];
-        vnpayStatus_g: Code[20];
-        vnpayType_g: Code[20];
-        vnpayAmount_g: Decimal;
+        vcbStatus_g: Code[20];
+        vcbAmount_g: Decimal;
         IsWaitingForAutoCheck: Boolean;
         AutoCheckCount: Integer;
         LastAutoCheckTime: DateTime;
+        TempBlob: Codeunit "Temp Blob";
 }

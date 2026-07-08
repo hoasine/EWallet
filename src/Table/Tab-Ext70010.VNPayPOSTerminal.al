@@ -1,4 +1,4 @@
-tableextension 70010 VNPayPOSTerminal extends "LSC POS Terminal"
+tableextension 70010 VNPAYStoreCard extends "LSC Store"
 {
     fields
     {
@@ -7,9 +7,9 @@ tableextension 70010 VNPayPOSTerminal extends "LSC POS Terminal"
             Caption = 'Enable VNPay Integration';
             DataClassification = ToBeClassified;
         }
-        field(72108; "VNPAY Payment Service URL"; Text[30])
+        field(72108; "VNPAY Payment Service URL"; Text[70])
         {
-            Caption = 'VCB Payment Service URL';
+            Caption = 'VNPAY Payment Service URL';
             DataClassification = ToBeClassified;
         }
         field(72110; "VNPAY Terminal ID"; Text[20])
@@ -42,5 +42,46 @@ tableextension 70010 VNPayPOSTerminal extends "LSC POS Terminal"
             Caption = 'VNPAY Check Interval Sec';
             DataClassification = ToBeClassified;
         }
+        field(72120; "Enable VCB Integration"; Boolean)
+        {
+            Caption = 'Enable VCB Integration';
+            DataClassification = ToBeClassified;
+        }
+        field(72121; "VCB Payment Service URL"; Text[250])
+        {
+            Caption = 'VCB Payment Service URL';
+            DataClassification = ToBeClassified;
+        }
+        field(72122; "VCB Terminal ID"; Text[20])
+        {
+            Caption = 'VCB Terminal ID';
+            DataClassification = ToBeClassified;
+        }
+        field(72123; "VCB Merchant ID"; Text[20])
+        {
+            Caption = 'VCB Merchant ID';
+            DataClassification = ToBeClassified;
+        }
+        field(72124; "VCB First Check Delay Sec"; Integer)
+        {
+            Caption = 'VCB First Check Delay Sec';
+            DataClassification = ToBeClassified;
+        }
+        field(72125; "VCB Check Interval Sec"; Integer)
+        {
+            Caption = 'VCB Check Interval Sec';
+            DataClassification = ToBeClassified;
+        }
+        field(72126; "VCB Max Retries"; Integer)
+        {
+            Caption = 'VCB Max Retries';
+            DataClassification = ToBeClassified;
+        }
+        field(72127; "VCB Tender Type Code"; Code[10])
+        {
+            Caption = 'VCB Tender Type Code';
+            DataClassification = ToBeClassified;
+        }
+
     }
 }
